@@ -1,0 +1,719 @@
+---
+title: "`r params$title`"
+format:
+  html:
+    # To use instead of self-contained that has been deprecated
+    # Using custom page layout (via 'style.css')
+    # Open link in a new window by default
+    # Display footnotes in pop-up window when hovering on it
+    toc: false
+    css: ["style.css"]
+    mainfont: Theinhardt
+    fontsize: "16px"
+    embed-resources: true
+    page-layout: custom
+    link-external-newwindow: true
+    footnotes-hover: true
+params:
+  title: ""
+  publication_date: ""
+  lang: "en"
+  doi: ""
+  github_url: ""
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r general-setup, include=FALSE}
+## This file contains the ENGLISH version of the data story
+
+# Set general chunk options
+knitr::opts_chunk$set(
+  echo = FALSE,
+  fig.showtext = TRUE,
+  fig.retina = 3,
+  fig.align = "center",
+  warning = FALSE,
+  message = FALSE
+)
+
+# Install snf.datastory package if not available, otherwise load it
+if (!require("snf.datastory")) {
+  if (!require("devtools")) {
+    install.packages("devtools")
+    library(devtools)
+  }
+  install_github("snsf-data/snf.datastory")
+  library(snf.datastory)
+}
+
+# Load packages
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(conflicted)
+library(jsonlite)
+library(here)
+library(glue)
+library(ggiraph)
+library(showtext)
+library(systemfonts)
+
+# Conflict preferences
+conflict_prefer("filter", "dplyr")
+conflict_prefer("get_datastory_theme", "snf.datastory")
+conflict_prefer("get_datastory_scheme", "snf.datastory")
+
+is_theinhardt_available <- file.exists(here("fonts", "TheinhardtReg.otf"))
+
+if (is_theinhardt_available) {
+  
+  sysfonts::font_add(
+    family = "Theinhardt",
+    regular = here("fonts", "TheinhardtReg.otf"),
+    bold = here("fonts", "TheinhardtBold.otf"),
+    bolditalic = here("fonts", "TheinhardtBoldIt.otf"),
+    italic = here("fonts", "TheinhardtRegIt.otf"),
+  )
+  
+  # Need to register the font to allow its use by ggiraph when creating SVG
+  # files.
+  if (!font_family_exists("Theinhardt")) {
+    
+    # Register existing/downloaded fonts
+    register_font(
+      name = "Theinhardt",
+      plain = list("fonts/TheinhardtReg.otf", 0),
+      bold = list("fonts/TheinhardtBold.otf", 0),
+      italic = list("fonts/TheinhardtRegIt.otf", 0),
+      bolditalic = list("fonts/TheinhardtBoldIt.otf", 0)
+    )
+  }
+  
+  font <- "Theinhardt"
+  
+} else {
+  
+  font <- "Arial"
+  
+}
+
+# Need if we want to use the registered font in ggiraph plots
+showtext_auto()
+
+# Increase showtext package font resolution
+showtext_opts(dpi = 320)
+
+# Set the locale for date formatting (Windows)
+Sys.setlocale(
+  "LC_TIME",
+  switch(
+    params$lang,
+    en = "English",
+    de = "German",
+    fr = "French"
+  )
+)
+
+# Create function to print number with local language-specific format
+print_num <- function(x) snf.datastory::print_num(x, lang = params$lang)
+
+# Knitr hook for local formatting of printed numbers
+knitr::knit_hooks$set(
+  inline <- function(x) {
+    if (!is.numeric(x)) {
+      x
+    } else {
+      print_num(x)
+    }
+  }
+)
+
+# Function that returns the desired language version of a string, given three
+# language strings are provided to the function.
+translate <- function(en_string = "NOT TRANSLATED",
+                      de_string = "NOT TRANSLATED",
+                      fr_string = "NOT TRANSLATED",
+                      lang = "en") {
+  
+  string <-
+    case_when(
+      lang == "en" ~ en_string, 
+      lang == "de" ~ de_string, 
+      lang == "fr" ~ fr_string, 
+      TRUE ~ "NO VALID LANGUAGE SPECIFIED"
+    )
+  
+  return(string)
+  
+}
+```
+
+```{r print-header-infos}
+#| results: asis
+
+# Add publication date to header
+cat(format(as_datetime(params$publication_date), "%d.%m.%Y"))
+```
+
+```{r story-specific-setup}
+#| include: false
+
+# Set story-specific variables
+starting_year <- 2011
+reporting_year <- 2023
+
+# load utility functions
+source(here("utils", "util_funs.R"))
+# load and preprocess the raw data
+source(here("utils", "preprocess_data.R"))
+# load plot descriptions
+source(here("utils", "define_plot_descriptions.R"))
+```
+
+<!-- Short lead (2-3 sentences) in bold -->
+
+**Demand for SNSF funding has been rising for years now. Why is this? Are more researchers applying for funding or are they submitting higher budgets? What consequences is this development having? An evaluation of internal data provides answers.**
+
+<!-- prepare data for demand totals to the SNSF vs. Federal Contributions -->
+
+```{r data-demand-total}
+# ---------------------------------------------------------------------------- #
+# prepare summary data for total budget requested vs. federal contributions
+demand_total <- data %>%
+  # add imputed values for eccelenza for year 2022
+  add_row(FundingInstrumentGaReporting = "Eccellenza",
+          CallDecisionYearReporting = 2022,
+          AmountRequested = data_eccelenza_imputed$TotalAmountRequested) %>%
+  # add imputed values for eccelenza for year 2023
+  add_row(FundingInstrumentGaReporting = "Eccellenza",
+          CallDecisionYearReporting = 2023,
+          AmountRequested = data_eccelenza_imputed$TotalAmountRequested) %>%
+  # add imputed values for PRIMA for year 2023
+  add_row(FundingInstrumentGaReporting = "PRIMA",
+          CallDecisionYearReporting = 2023,
+          AmountRequested = data_prima_imputed$TotalAmountRequested) %>%
+  # group by call decision year
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the total amount requested
+  summarise(
+    # sum of all amounts requested across all grants in a given year
+    `Funding requests to the SNSF` = sum(AmountRequested, na.rm = TRUE)) %>%
+  # ungroup 
+  ungroup() %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # add data regarding amount received from the federal contributions
+  add_column(
+    # add federal contributions in MCHF
+    `Federal contributions` = data_federal$FederalContribution * 1000) %>%
+  # display amount requested in MCHF
+  mutate(`Funding requests to the SNSF` =
+           `Funding requests to the SNSF` / 1000000) %>%
+  # reshape format to long
+  pivot_longer(-CallDecisionYearReporting,
+               names_to = "FundingSource",
+               values_to = "TotalAmount") %>%
+  # rename FundingSource depending on language
+  mutate(FundingSource = case_when(
+    # federal contributions
+    FundingSource == "Federal contributions" ~ federal_contrib_legend,
+    # demand to SNSF
+    FundingSource == "Funding requests to the SNSF" ~ demand_snsf_legend,
+    # fallback as NA
+    TRUE ~ NA
+  ))
+# ---------------------------------------------------------------------------- #
+```
+
+### Overview of findings
+
+A descriptive analysis of grant application figures between `r starting_year` and `r reporting_year` shows that:
+
+-	The rising demand for SNSF funding is attributable primarily to higher requested budgets per application in its Project and Career funding schemes.
+- The higher budgets are due, among other things, to an increase in durations per application and, in Project funding, also to increases in team sizes.
+- The share of approved applications in all submitted applications is decreasing – from over 50\% to just over 30\% for Project and Career funding.
+
+Demand for SNSF funding has been growing continuously for years now, and rose particularly dramatically in 2016, as the yellow line in the graph below shows. However, the federal funding provided to the SNSF (blue line) has not increased in equal measure over the same period. The difference between requested funding and available resources is growing ever larger. Or, to put it another way: ever increasing demand cannot be met to the desired extent.
+
+<!-- and plot the interactive figure -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmount[[params$lang]]`
+:::
+```{r plot-demand-total}
+#| out-width: "100%"
+#| fig-height: 4
+
+# ---------------------------------------------------------------------------- #
+# Create ggplot timeseries plot
+demand_total_plot <- get_ggplot_main(demand_total)
+
+# ---------------------------------------------------------------------------- #
+# Create ggiraph interactive plot
+get_ggirafe(demand_total_plot)
+# ---------------------------------------------------------------------------- #
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmount[[params$lang]]`
+:::
+```{r plot-demand-total-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+# ---------------------------------------------------------------------------- #
+# Create ggplot timeseries plot
+demand_total_plot <- get_ggplot_main(demand_total, mobile = TRUE)
+
+# ---------------------------------------------------------------------------- #
+# Create ggiraph interactive plot
+get_ggirafe(demand_total_plot)
+# ---------------------------------------------------------------------------- #
+```
+:::
+:::
+
+In order to probe the possible influencing factors behind this development, we have undertaken a descriptive analysis of the applications. For the period `r starting_year` – `r reporting_year`, we have analysed all the SNSF’s funding schemes with a focus on the two largest funding categories: [Project funding](https://www.snf.ch/en/WAvYcY7awAUGolST/funding/projects/projects-in-all-disciplines) and [Career funding](https://www.snf.ch/en/48YVbNHGCW52J2TW/page/funding/careers).
+
+<!-- define info box for project and career funding -->
+::: info-box
+### Project and Career funding
+
+With its Project funding, the SNSF finances research projects in any discipline and on any topic by individual researchers and small research groups. In 2016, the SNSF reformed its Project funding framework to give researchers more flexibility in terms of project duration and team size, among other reasons. In the Careers area, the main focus is on the individual researcher. Tailored to different career stages, and in particular to early- to mid-career researchers, this scheme allows the SNSF to support these individuals in gaining both research experience and autonomy. Excluded from this analysis, due to their special focus, are the [National Centres of Competence in Research](https://www.snf.ch/en/FJBJ8XGQ1tjG8J8w/funding/programmes/national-centres-of-competence-in-research-nccr) (NCCRs) and the Horizon Europe transitional measures. The box at the end of this article explains the data basis for the analysis.
+:::
+
+In the following text, for the sake of completeness all funding schemes will be presented together (grey line: “All schemes”) alongside the Project funding (excl. special calls for proposals such as [Spark](https://www.snf.ch/en/8EWqXT6CZ7wuAJUq/funding/programmes/spark)) and Career funding schemes.
+
+### The big picture
+
+As our analyses show, demand for funding is increasing in almost all SNSF funding schemes. The Project and Career funding schemes have a particularly strong influence on the overall demand.
+
+- In the case of Projects, demand over the last 10 years has increased from 840 million to 1,500 million francs (orange line in the graph below) and
+- In the case of Careers (purple line) from 490 million to 1,100 million francs – with the exception of the surge to almost 1,500 million in 2018, which arose as a result of two overlapping calls for proposals.
+
+These are the two types of funding applied for the most by researchers and research groups, with up to 3,000 applications a year. Alongside Project and Career funding, another area responsible for the strong increase in demand in 2015 to 2016, which can clearly be seen in the first figure, was the [National Research Programmes](https://www.snf.ch/en/ELxP53n5RBBa08a2/funding/programmes/national-research-programmes-nrp) (NRPs).
+
+<!-- prepare data for all instruments together -->
+
+```{r data-demand-all-instruments}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for all instruments
+demand_all_instruments <- data %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # impute eccelenza data for the year 2022
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2022) %>%
+  # and year 2023 as well
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2023) %>%
+  # and year 2023 for PRIMA
+  impute_data(data_imputed = data_prima_imputed, year = 2023) %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- prepare data for careers -->
+
+```{r data-demand-careers}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for careers
+demand_careers <- data %>%
+  # filter out only careers instruments
+  filter(FundingInstrumentGaLevel1 == "Careers") %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # impute eccelenza data for the year 2022
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2022) %>%
+  # and year 2023 as well
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2023) %>%
+  # and year PRIMA for year 2023 as well
+  impute_data(data_imputed = data_prima_imputed, year = 2023) %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- prepare data for projects -->
+
+```{r data-demand-projects}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for projects
+demand_projects <- data %>%
+  # filter out only project funding (as defined in the Dataportal's grant search
+  # i.e. Projects -> Project funding (no special calls, no Spark calls, etc.)
+  filter(FundingInstrumentGaReporting == "Project funding") %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # no imputation of Eccelenza as it belongs to Careers and not Projects
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- combine the data sources -->
+
+```{r data-demand-combined}
+# ---------------------------------------------------------------------------- #
+# combine summary data of all instruments, careers and projects together
+demand_combined <- demand_all_instruments %>%
+  # add respective funding isntrument name for all instruments in total
+  mutate(FundingInstrument = all_instruments) %>%
+  # and rbind the data from projects from previous dataset
+  bind_rows(demand_projects %>%
+              # add respective funding instrument name for projects
+              mutate(FundingInstrument = projects)) %>%
+  # and rbind the data from careers from previous dataset
+  bind_rows(demand_careers %>%
+              # add respective funding instrument name for projects
+              mutate(FundingInstrument = careers)) %>%
+  # set factor order of the funding instruments
+  mutate(FundingInstrument = fct_relevel(FundingInstrument,
+                                         careers, projects, all_instruments))
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- generate all the plots needed and save them into a named list -->
+
+```{r generate-plots}
+# ---------------------------------------------------------------------------- #
+# generate plots for all quantities of interest
+plot_list <- get_plots(plot_data = demand_combined,
+                       plot_types = plot_types[-1],
+                       lang = params$lang,
+                       mobile = FALSE)
+# ---------------------------------------------------------------------------- #
+```
+
+```{r generate-plots-mobile}
+# ---------------------------------------------------------------------------- #
+# generate plots for all quantities of interest for mobile version
+plot_list_mobile <- get_plots(plot_data = demand_combined,
+                              plot_types = plot_types[-1],
+                              lang = params$lang,
+                              mobile = TRUE)
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- plot for total amount requested -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmountRequested[[params$lang]]`
+:::
+```{r plot-total-amount-requested}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$TotalAmountRequested
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmountRequested[[params$lang]]`
+:::
+```{r plot-total-amount-requested-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$TotalAmountRequested
+```
+:::
+:::
+
+### Demand not driven by number of applications
+
+Our analysis shows that the increasing demand for funding is not being driven by rising numbers of applications. With just a few outliers, the number of applications for Project funding hovers around 2,000 to 2,500 per year, as the orange line in the graph below shows. For Career funding, too (purple line), there is no clear upward or downward trend to speak of overall.
+
+<!-- plot for total number submitted -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalNumberSubmitted[[params$lang]]`
+:::
+```{r plot-total-number-submitted}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$TotalNumberSubmitted
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalNumberSubmitted[[params$lang]]`
+:::
+```{r plot-total-number-submitted-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$TotalNumberSubmitted
+```
+:::
+:::
+
+What is driving the rise in demand for funding, if not the number of applications themselves?
+
+### More funding is being requested for each application
+
+The analysis shows a clear result. The level of funding being requested per application is growing substantially, as the following graph attests. This is true for both Project (orange line) and Career funding (purple line).
+
+<!-- plot for average amount per submission -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerSubmission[[params$lang]]`
+:::
+```{r plot-amount-per-submission}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AmountPerSubmission
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerSubmission[[params$lang]]`
+:::
+```{r plot-amount-per-submission-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AmountPerSubmission
+```
+:::
+:::
+
+In the case of Projects, in 2016 and 2017 we can see a sharp increase from an average of 400,000 francs per application to, suddenly, just under 600,000 francs. The reasons for this increase include, among other things, the funding reforms that came into effect in 2016: the SNSF modified the scheme to allow applicants to request longer project durations of up to four years instead of three, as well as allowing them to add project partners. This was the SNSF’s response to the increasing relevance of collaborative research and the needs of the researchers.
+
+In the case of Career funding, we can see an increase from 2017 to 2018: the average amount of requested funding rose from approx. 300,000 francs to almost double that number. Among other things, this development can be attributed to the introduction of the [Eccellenza](https://www.snf.ch/en/DGCP4SuM4eU2O1bz/funding/careers/eccellenza) and [PRIMA](https://www.snf.ch/en/soMWfibVDpNMVR36/funding/careers/prima) schemes. With these two schemes, applicants were able to request more funding than for other Careers schemes, thanks to possible duration of up to 5 years. In addition, in the same year as the two new schemes were introduced, the SNSF put out the last call for proposals for its Professorships scheme, which was replaced by Eccellenza. 
+
+### Researchers are applying for longer project durations
+
+As expected, since the Project funding reforms allowing longer project durations, there has been an upward shift in the durations requested. This is shown by the orange line in the graph below. Until 2016, the average duration requested in Project funding applications was just over 30 months. Since 2017, applicants have been taking advantage of the longer duration option, with an average requested duration of near 44 months.
+
+For the Career schemes, too, application durations are strongly influencing demand. Since 2018, there has been a clear increase in the average durations requested in Career funding proposals (purple line). Up until 2018, the average requested term had remained constant at around 24 months per application. With the introduction of the Eccellenza and PRIMA schemes in 2018, which each have possible maximum durations of 60 months, the requested project duration for the Career schemes rose overall to near 38 months on average.
+
+<!-- plot for average duration in months -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AverageDurationMonth[[params$lang]]`
+:::
+```{r plot-average-duration-month}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AverageDurationMonth
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AverageDurationMonth[[params$lang]]`
+:::
+```{r plot-average-duration-month-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AverageDurationMonth
+```
+:::
+:::
+
+The influence of the longer durations on demand becomes clear when they are explicitly taken into account when looking at the level of requested funding per application. The graph below thus shows the development in requested funding per application-year.
+
+<!-- plot for average amount requested for project-year -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerYear[[params$lang]]`
+:::
+```{r plot-amount-per-year}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AmountPerYear
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerYear[[params$lang]]`
+:::
+```{r plot-amount-per-year-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AmountPerYear
+```
+:::
+:::
+
+The increase in demand for Project funding is levelling off (orange line) from an average of 141,000 francs per application and year to 191,000 francs. If we control for the requested duration per proposal, the increase in the level of requested funding also comes out lower for Career schemes (purple line). Nonetheless, the residual increase is not trivial, and is to be investigated more closely.
+
+### More project partners
+
+With the 2016 Project funding reforms, grants were allowed to have project partners in addition to (co-)applicants. Since then, applicants have been taking up the option to apply for Project funding in teams with multiple project partners: until 2016, the teams applying had an average of two members; since 2017, teams have had three or more members, as the orange line in the graph shows. This, alongside other factors, could explain the residual increase in requested funding per application and year. For additional analyses on project partners, see: [More networked research thanks to project partners: a look at the first years](https://data.snf.ch/stories/project-partners-and-networked-research-en.html).
+
+<!-- plot for average team size in a project -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AverageTeamSize[[params$lang]]`
+:::
+```{r plot-average-team-size}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AverageTeamSize
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AverageTeamSize[[params$lang]]`
+:::
+```{r plot-average-team-size-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AverageTeamSize
+```
+:::
+:::
+
+### Consequences of rising demand
+
+With demand rising and not enough funding available, the SNSF can either fund fewer applications or reduce the funding awarded per application. After a critical look at the requested funding, in some cases cuts may be made per application. However, as a matter of principle the SNSF strives to make the funding for approved applications available at the amount requested.
+
+This is reflected accordingly in the success rates. The declining success rates for the Project and Career funding schemes show that the share of approved applications in all submitted applications is falling: from over 50\% to just over 30\% for these schemes, with big differences between the funding schemes in particular in the Career area. The SNSF plays a subsidiary role in Career funding and orients its support more towards the number of approved applications than a constant funding rate. On the one hand, lower success rates mean increased competition. On the other, they can also mean that high-quality applications are not being funded.
+
+<!-- plot for success rates -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$SuccessRate[[params$lang]]`
+:::
+```{r plot-success-rate}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$SuccessRate
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$SuccessRate[[params$lang]]`
+:::
+```{r plot-success-rate-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$SuccessRate
+```
+:::
+:::
+
+Funding rates, which show the amount of awarded funding as a percentage of all requested funding, are also showing a downward trend. However, this decline is not as pronounced as that in the success rates.
+
+<!-- plot for funding rates -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$FundingRate[[params$lang]]`
+:::
+```{r plot-funding-rate}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$FundingRate
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$FundingRate[[params$lang]]`
+:::
+```{r plot-funding-rate-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$FundingRate
+```
+:::
+:::
+
+### Descriptive analysis: conclusion
+
+- Rising demand is primarily attributable to increases in requested budgets per application in the Project and Career funding schemes.
+- The higher budgets are due, among other things, to an increase in durations per application and, in Project funding, also to increases in team sizes. With insufficient funding available, this means that the SNSF will not be able to fund as many applications, resulting in greater competition.
+
+<!-- define info box for data sources -->
+::: info-box
+
+### Data basis
+
+The data basis used for this analysis is the total applications received for all SNSF funding schemes between `r starting_year` and `r reporting_year`. The year cited is the decision year for a call for proposals. The data on the relevant schemes correspond to the data basis of the [official key figures in the SNSF data portal](https://data.snf.ch/key-figures). The National Centres of Competence in Research (NCCRs) are thus excluded from the analysis. Moreover, due to nonstandard budgeting, the following schemes are also not included in the analysis: Horizon Europe transitional measures, Open Access Funding, Energy Research (Ambizione and Assistant Professor), Enlargement Contributions, the Swiss Roadmap for Research Infrastructures and the r4d, SOR4D, SCOPES and MARVIS schemes. Also not included are the overhead contributions (SNSF contributions to universities to cover a portion of the indirect research costs). Due to the integration of the Eccellenza scheme into the Horizon Europe transitional measures – which are not taken into account here – in 2022 and of the PRIMA scheme in 2023 (for more information on the transitional measures see: [2022: 173 million francs for projects under the transitional measures scheme](https://data.snf.ch/stories/preliminary-funding-in-2022-en.html)), for the sake of completeness the data for Eccellenza in 2022 and 2023 and for PRIMA in 2023 were factored in using average values from the previous years. Lastly, International Short Research Visits were re-classified from Careers into Science communication due to their short-term design, fostering scientific exchange.
+
+The federal funding in the first figure comprises the basic contribution plus additional contributions from the mandates and additional tasks for the National Research Programmes (NRPs), FLARE and the Bilateral Programmes. The SNSF funding for transitional measures due to Switzerland not being associated with Horizon Europe, as well as the funding for National Centres of Competence in Research (NCCRs) and for the overhead contributions, are excluded from the analysis in the same way as for the demand data.
+::: 
+
+Data, text and code of this data story are [available on Github](`r params$github_url`) and [archived on Zenodo](`r params$doi`). <br>DOI: `r str_remove(params$doi, "https://doi.org/")`
+
+```{r prevent-internal-snsf-packages, include=FALSE}
+#| include: false
+
+# Internal SNSF packages must not be used in data stories, as their
+# pre-processing functions are internal and the corporate design differs from
+# the data portal.
+if (any(c("snfverse", "snf.preprocessing", "snf.plot") %in% 
+        loadedNamespaces())) {
+  stop(glue(
+    "You must not use internal SNSF packages in data stories.",
+    " Please resort to snf.datastory."
+  ))
+}
+```

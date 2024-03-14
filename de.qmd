@@ -1,0 +1,721 @@
+---
+title: "`r params$title`"
+format:
+  html:
+    # To use instead of self-contained that has been deprecated
+    # Using custom page layout (via 'style.css')
+    # Open link in a new window by default
+    # Display footnotes in pop-up window when hovering on it
+    toc: false
+    css: ["style.css"]
+    mainfont: Theinhardt
+    fontsize: "16px"
+    embed-resources: true
+    page-layout: custom
+    link-external-newwindow: true
+    footnotes-hover: true
+params:
+  title: ""
+  publication_date: ""
+  lang: "de"
+  doi: ""
+  github_url: ""
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r general-setup, include=FALSE}
+# for testing rendering
+# params <- list(lang = "en",
+#                publication_date = "2024-09-03")
+## This file contains the ENGLISH version of the data story
+
+# Set general chunk options
+knitr::opts_chunk$set(
+  echo = FALSE,
+  fig.showtext = TRUE,
+  fig.retina = 3,
+  fig.align = "center",
+  warning = FALSE,
+  message = FALSE
+)
+
+# Install snf.datastory package if not available, otherwise load it
+if (!require("snf.datastory")) {
+  if (!require("devtools")) {
+    install.packages("devtools")
+    library(devtools)
+  }
+  install_github("snsf-data/snf.datastory")
+  library(snf.datastory)
+}
+
+# Load packages
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(conflicted)
+library(jsonlite)
+library(here)
+library(glue)
+library(ggiraph)
+library(showtext)
+library(systemfonts)
+
+# Conflict preferences
+conflict_prefer("filter", "dplyr")
+conflict_prefer("get_datastory_theme", "snf.datastory")
+conflict_prefer("get_datastory_scheme", "snf.datastory")
+
+is_theinhardt_available <- file.exists(here("fonts", "TheinhardtReg.otf"))
+
+if (is_theinhardt_available) {
+  
+  sysfonts::font_add(
+    family = "Theinhardt",
+    regular = here("fonts", "TheinhardtReg.otf"),
+    bold = here("fonts", "TheinhardtBold.otf"),
+    bolditalic = here("fonts", "TheinhardtBoldIt.otf"),
+    italic = here("fonts", "TheinhardtRegIt.otf"),
+  )
+  
+  # Need to register the font to allow its use by ggiraph when creating SVG
+  # files.
+  if (!font_family_exists("Theinhardt")) {
+    
+    # Register existing/downloaded fonts
+    register_font(
+      name = "Theinhardt",
+      plain = list("fonts/TheinhardtReg.otf", 0),
+      bold = list("fonts/TheinhardtBold.otf", 0),
+      italic = list("fonts/TheinhardtRegIt.otf", 0),
+      bolditalic = list("fonts/TheinhardtBoldIt.otf", 0)
+    )
+  }
+  
+  font <- "Theinhardt"
+  
+} else {
+  
+  font <- "Arial"
+  
+}
+
+# Need if we want to use the registered font in ggiraph plots
+showtext_auto()
+
+# Increase showtext package font resolution
+showtext_opts(dpi = 320)
+
+# Set the locale for date formatting (Windows)
+Sys.setlocale(
+  "LC_TIME",
+  switch(
+    params$lang,
+    en = "English",
+    de = "German",
+    fr = "French"
+  )
+)
+
+# Create function to print number with local language-specific format
+print_num <- function(x) snf.datastory::print_num(x, lang = params$lang)
+
+# Knitr hook for local formatting of printed numbers
+knitr::knit_hooks$set(
+  inline <- function(x) {
+    if (!is.numeric(x)) {
+      x
+    } else {
+      print_num(x)
+    }
+  }
+)
+
+# Function that returns the desired language version of a string, given three
+# language strings are provided to the function.
+translate <- function(en_string = "NOT TRANSLATED",
+                      de_string = "NOT TRANSLATED",
+                      fr_string = "NOT TRANSLATED",
+                      lang = "en") {
+  
+  string <-
+    case_when(
+      lang == "en" ~ en_string, 
+      lang == "de" ~ de_string, 
+      lang == "fr" ~ fr_string, 
+      TRUE ~ "NO VALID LANGUAGE SPECIFIED"
+    )
+  
+  return(string)
+  
+}
+```
+
+```{r print-header-infos}
+#| results: asis
+
+# Add publication date to header
+cat(format(as_datetime(params$publication_date), "%d.%m.%Y"))
+```
+
+```{r story-specific-setup}
+#| include: false
+
+# Set story-specific variables
+starting_year <- 2011
+reporting_year <- 2023
+
+# load utility functions
+source(here("utils", "util_funs.R"))
+# load and preprocess the raw data
+source(here("utils", "preprocess_data.R"))
+# load plot descriptions
+source(here("utils", "define_plot_descriptions.R"))
+```
+
+<!-- Short lead (2-3 sentences) in bold -->
+
+**Die Nachfrage nach Mitteln des SNF steigt seit Jahren. Warum? Bewerben sich mehr Forschende um Förderung oder reichen sie höhere Budgets ein? Welche Konsequenzen hat diese Entwicklung? Eine Auswertung interner Daten gibt Antwort.**
+
+<!-- prepare data for demand totals to the SNSF vs. Federal Contributions -->
+
+```{r data-demand-total}
+# ---------------------------------------------------------------------------- #
+# prepare summary data for total budget requested vs. federal contributions
+demand_total <- data %>%
+  # add imputed values for eccelenza for year 2022
+  add_row(FundingInstrumentGaReporting = "Eccellenza",
+          CallDecisionYearReporting = 2022,
+          AmountRequested = data_eccelenza_imputed$TotalAmountRequested) %>%
+  # add imputed values for eccelenza for year 2023
+  add_row(FundingInstrumentGaReporting = "Eccellenza",
+          CallDecisionYearReporting = 2023,
+          AmountRequested = data_eccelenza_imputed$TotalAmountRequested) %>%
+  # add imputed values for PRIMA for year 2023
+  add_row(FundingInstrumentGaReporting = "PRIMA",
+          CallDecisionYearReporting = 2023,
+          AmountRequested = data_prima_imputed$TotalAmountRequested) %>%
+  # group by call decision year
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the total amount requested
+  summarise(
+    # sum of all amounts requested across all grants in a given year
+    `Funding requests to the SNSF` = sum(AmountRequested, na.rm = TRUE)) %>%
+  # ungroup 
+  ungroup() %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # add data regarding amount received from the federal contributions
+  add_column(
+    # add federal contributions in MCHF
+    `Federal contributions` = data_federal$FederalContribution * 1000) %>%
+  # display amount requested in MCHF
+  mutate(`Funding requests to the SNSF` =
+           `Funding requests to the SNSF` / 1000000) %>%
+  # reshape format to long
+  pivot_longer(-CallDecisionYearReporting,
+               names_to = "FundingSource",
+               values_to = "TotalAmount") %>%
+  # rename FundingSource depending on language
+  mutate(FundingSource = case_when(
+    # federal contributions
+    FundingSource == "Federal contributions" ~ federal_contrib_legend,
+    # demand to SNSF
+    FundingSource == "Funding requests to the SNSF" ~ demand_snsf_legend,
+    # fallback as NA
+    TRUE ~ NA
+  ))
+# ---------------------------------------------------------------------------- #
+```
+
+### Die Erkenntnisse im Überblick
+
+Eine deskriptive Analyse der Gesuchszahlen zwischen `r starting_year` und `r reporting_year` zeigt:
+
+- Die steigende Nachfrage nach Mitteln des SNF ist in erster Linie auf höhere Budgets pro Gesuch in der Projekt- und Karriereförderung zurückzuführen.
+- Die höheren Budgets sind unter anderem durch länger werdende Laufzeiten pro Gesuch und in der Projektförderung auch durch grösser werdende Teams bedingt.
+-	Der Anteil bewilligter Gesuche an allen eingereichten Gesuchen nimmt ab: von über 50\% auf knapp über 30\% für die Projekt- und Karriereförderung.
+
+Die Nachfrage nach SNF-Mitteln wächst seit Jahren kontinuierlich und ist insbesondere im Jahr 2016 sprunghaft gestiegen, wie die gelbe Linie in der folgenden Grafik zeigt. Die Bundesbeiträge an den SNF (blaue Linie) haben sich im selben Zeitraum hingegen nicht im gleichen Masse entwickelt. Die Differenz zwischen angefragter Finanzierung und den zur Verfügung stehenden Mitteln wird immer grösser. Oder anders formuliert: Immer mehr Begehren kann nicht im gewünschten Ausmass entsprochen werden.
+
+<!-- plot the interactive figure -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmount[[params$lang]]`
+:::
+```{r plot-demand-total}
+#| out-width: "100%"
+#| fig-height: 4
+
+# ---------------------------------------------------------------------------- #
+# Create ggplot timeseries plot
+demand_total_plot <- get_ggplot_main(demand_total)
+
+# ---------------------------------------------------------------------------- #
+# Create ggiraph interactive plot
+get_ggirafe(demand_total_plot)
+# ---------------------------------------------------------------------------- #
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmount[[params$lang]]`
+:::
+```{r plot-demand-total-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+# ---------------------------------------------------------------------------- #
+# Create ggplot timeseries plot
+demand_total_plot <- get_ggplot_main(demand_total, mobile = TRUE)
+
+# ---------------------------------------------------------------------------- #
+# Create ggiraph interactive plot
+get_ggirafe(demand_total_plot)
+# ---------------------------------------------------------------------------- #
+```
+:::
+:::
+
+Wir haben, um den möglichen Einflussfaktoren dieser Entwicklung auf den Grund zu gehen, eine deskriptive Analyse der Gesuche vorgenommen. Untersucht haben wir für den Zeitraum `r starting_year` – `r reporting_year` alle Förderinstrumente des SNF mit einem Fokus auf die zwei grössten Förderkategorien: [Projektförderung](https://www.snf.ch/de/WAvYcY7awAUGolST/foerderung/projekte/projekte-in-allen-disziplinen) und [Karriereförderung](https://www.snf.ch/de/48YVbNHGCW52J2TW/seite/foerderung/karrieren).
+
+<!-- define info box for project and career funding -->
+::: info-box
+### Projekt- und Karriereförderung
+
+Mit der Projektförderung finanziert der SNF disziplin- und themenoffene Forschungsprojekte von einzelnen Forschenden und kleineren Forschungsgruppen. Im Jahr 2016 hat der SNF die Projektförderung reformiert, unter anderem um die Förderung für Forschende hinsichtlich Projektlaufzeit und Teamgrösse flexibler zu gestalten. In der Karriereförderung steht die forschende Person im Vordergrund. Zugeschnitten auf verschiedene Karrierestufen, insbesondere Forschende früher bis mittlerer Karrierestufen, unterstützt der SNF die Forschungserfahrung sowie Unabhängigkeit dieser Personen. Ausgenommen sind hierbei aufgrund ihrer Sonderausrichtung die [Nationalen Forschungsschwerpunkte](https://www.snf.ch/de/FJBJ8XGQ1tjG8J8w/foerderung/programme/nationale-forschungsschwerpunkte) (NFS) sowie die Horizon-Europe-Übergangsmassnahmen. Der Kasten am Ende des Artikels erläutert die Datengrundlage der Analyse.
+:::
+
+Im Folgenden werden der Vollständigkeit halber neben der Projektförderung (ohne Sonderausschreibungen wie z.B.  [Spark](https://www.snf.ch/en/8EWqXT6CZ7wuAJUq/funding/programmes/spark)) und der Karriereförderung alle Förderinstrumente zusammen dargestellt (graue Linie «Alle Instrumente»).
+
+### Die Gesamtperspektive
+
+Wie unsere Auswertungen zeigen, steigt die Nachfrage nach Mitteln in nahezu allen Instrumenten des SNF. Einen besonders starken Einfluss auf die Gesamtnachfrage haben die Instrumente der Projekt- und Karriereförderung:
+
+-	Bei den Projekten stieg die Nachfrage in den letzten 10 Jahren von 840 Millionen auf 1500 Millionen Franken (orange Linie in der folgenden Grafik) und 
+-	bei den Karrieren (violette Linie) von 490 Millionen auf 1100 Millionen Franken – mit Ausnahme des Sprungs auf knapp 1500 Millionen im Jahr 2018, welcher aufgrund zwei überlappender Ausschreibungen zustande kam.
+
+Für diese beiden Förderarten bewerben sich mit bis zu 3000 Gesuchen pro Jahr die meisten Forschenden und Forschungsgruppen. Neben der Projekt- und Karriereförderung sorgten für den starken Anstieg der Nachfrage in den Jahren 2015 auf 2016, der in der ersten Grafik hervorsticht, zusätzlich die  [Nationalen Forschungsprogramme (NFP)](https://www.snf.ch/de/ELxP53n5RBBa08a2/foerderung/programme/nationale-forschungsprogramme).
+
+<!-- prepare data for all instruments together -->
+
+```{r data-demand-all-instruments}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for all instruments
+demand_all_instruments <- data %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # impute eccelenza data for the year 2022
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2022) %>%
+  # and year 2023 as well
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2023) %>%
+  # and year 2023 for PRIMA
+  impute_data(data_imputed = data_prima_imputed, year = 2023) %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- prepare data for careers -->
+
+```{r data-demand-careers}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for careers
+demand_careers <- data %>%
+  # filter out only careers instruments
+  filter(FundingInstrumentGaLevel1 == "Careers") %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # impute eccelenza data for the year 2022
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2022) %>%
+  # and year 2023 as well
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2023) %>%
+  # and year PRIMA for year 2023 as well
+  impute_data(data_imputed = data_prima_imputed, year = 2023) %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- prepare data for projects -->
+
+```{r data-demand-projects}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for projects
+demand_projects <- data %>%
+  # filter out only project funding (as defined in the Dataportal's grant search
+  # i.e. Projects -> Project funding (no special calls, no Spark calls, etc.)
+  filter(FundingInstrumentGaReporting == "Project funding") %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # no imputation of Eccelenza as it belongs to Careers and not Projects
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- combine the data sources -->
+
+```{r data-demand-combined}
+# ---------------------------------------------------------------------------- #
+# combine summary data of all instruments, careers and projects together
+demand_combined <- demand_all_instruments %>%
+  # add respective funding isntrument name for all instruments in total
+  mutate(FundingInstrument = all_instruments) %>%
+  # and rbind the data from projects from previous dataset
+  bind_rows(demand_projects %>%
+              # add respective funding instrument name for projects
+              mutate(FundingInstrument = projects)) %>%
+  # and rbind the data from careers from previous dataset
+  bind_rows(demand_careers %>%
+              # add respective funding instrument name for projects
+              mutate(FundingInstrument = careers)) %>%
+  # set factor order of the funding instruments
+  mutate(FundingInstrument = fct_relevel(FundingInstrument,
+                                         careers, projects, all_instruments))
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- generate all the plots needed and save them into a named list -->
+
+```{r generate-plots}
+# ---------------------------------------------------------------------------- #
+# generate plots for all quantities of interest
+plot_list <- get_plots(plot_data = demand_combined,
+                       plot_types = plot_types[-1],
+                       lang = params$lang,
+                       mobile = FALSE)
+# ---------------------------------------------------------------------------- #
+```
+
+```{r generate-plots-mobile}
+# ---------------------------------------------------------------------------- #
+# generate plots for all quantities of interest for mobile version
+plot_list_mobile <- get_plots(plot_data = demand_combined,
+                              plot_types = plot_types[-1],
+                              lang = params$lang,
+                              mobile = TRUE)
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- plot for total amount requested -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmountRequested[[params$lang]]`
+:::
+```{r plot-total-amount-requested}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$TotalAmountRequested
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmountRequested[[params$lang]]`
+:::
+```{r plot-total-amount-requested-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$TotalAmountRequested
+```
+:::
+:::
+
+### Nachfrage nicht durch die Zahl der Gesuche getrieben
+
+Unsere Auswertung zeigt: Die steigende Nachfrage nach Mitteln wird nicht durch steigende Gesuchszahlen getrieben. Die Anzahl an Gesuchen für die Projektförderung schwankt, mit nur wenigen Ausreissern, um 2000 bis 2500 pro Jahr, wie die orange Linie in der folgenden Grafik zeigt. Auch bei den Karriereinstrumenten (violette Linie) lässt sich in der Gesamtbetrachtung von keinem klaren Aufwärts- oder Abwärtstrend sprechen.
+
+<!-- plot for total number submitted -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalNumberSubmitted[[params$lang]]`
+:::
+```{r plot-total-number-submitted}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$TotalNumberSubmitted
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalNumberSubmitted[[params$lang]]`
+:::
+```{r plot-total-number-submitted-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$TotalNumberSubmitted
+```
+:::
+:::
+
+Was treibt die steigende Nachfrage nach Mitteln nach oben, wenn nicht die Gesuchszahlen selbst?
+
+### Pro Gesuch werden mehr Mittel angefragt
+
+Die Analyse zeigt ein klares Resultat: Die Höhe der nachgefragten Mittel pro Gesuch steigt deutlich an, wie die folgende Grafik belegt. Dies gilt für die Projektförderung (orange Linie) ebenso wie für die Karriereförderung (violette Linie).
+
+<!-- plot for average amount per submission -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerSubmission[[params$lang]]`
+:::
+```{r plot-amount-per-submission}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AmountPerSubmission
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerSubmission[[params$lang]]`
+:::
+```{r plot-amount-per-submission-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AmountPerSubmission
+```
+:::
+:::
+
+Bei den Projekten sieht man in den Jahren von 2016 auf 2017 einen sprunghaften Anstieg: von durchschnittlich 400 000 Franken pro Gesuch auf plötzlich knapp 600 000 Franken. Der Anstieg ist unter anderem auf die Reform zurückzuführen, die 2016 in Kraft getreten ist: Damals hat der SNF das Instrument angepasst, um Gesuchstellenden längere Laufzeiten von bis zu 4 anstatt 3 Jahren sowie das Hinzufügen von Projektpartnern zu ermöglichen. Der SNF reagierte so auf die zunehmende Relevanz kollaborativer Forschung und die Bedürfnisse der Forschenden. 
+
+Bei den Karrieren ist ein Anstieg von 2017 auf 2018 zu sehen: die durchschnittliche Höhe nachgefragter Mittel stieg von ca. 300 000 Franken auf knapp das Doppelte. Diese Entwicklung lässt sich unter anderem auf die Einführung der beiden Instrumente  [Eccellenza](https://www.snf.ch/en/DGCP4SuM4eU2O1bz/funding/careers/eccellenza) und [PRIMA](https://www.snf.ch/en/soMWfibVDpNMVR36/funding/careers/prima) zurückführen. In diesen beiden Instrumenten können Gesuchstellende dank möglicher Laufzeiten von bis zu 5 Jahren mehr Mittel anfragen als in anderen Karriereinstrumenten. Zudem fand im selben Jahr zur Einführung der beiden neuen Instrumente die letzte Ausschreibung der SNF-Förderprofessuren statt, einem Instrument, das durch Eccellenza ersetzt wurde. 
+
+### Forschende bewerben sich für längere Projektlaufzeiten
+
+Wie erwartet gab es seit der Reform der Projektförderung, welche längere Projektlaufzeiten ermöglicht hat, eine Verschiebung der effektiv angefragten Laufzeiten nach oben. Dies zeigt die orange Linie in der folgenden Grafik. Bis 2016 lag die durchschnittlich in den Gesuchen der Projektförderung angefragte Laufzeit bei knapp über 30 Monaten. Ab 2017 beanspruchen Gesuchstellende die seither längere mögliche Dauer, mit durchschnittlich angefragter Laufzeit von bis zu 44 Monaten.  
+
+Auch bei den Karriereinstrumenten hat die Laufzeit von Gesuchen einen starken Einfluss auf die Nachfrage. Ab 2018 ist ein deutlicher Anstieg der durchschnittlichen Gesuchslaufzeiten in der Karriereförderung zu sehen (violette Linie). Die durchschnittlich angefragte Laufzeit lag bis 2018 konstant bei etwa 24 Monaten pro Gesuch. Mit der Einführung der Instrumente Eccellenza und PRIMA im Jahr 2018, mit jeweils möglichen maximal Laufzeiten von 60 Monaten, stiegen die angefragten Projektlaufzeiten insgesamt bei den Karriereinstrumenten bis zu 38 Monaten im Schnitt.
+
+<!-- plot for average duration in months -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AverageDurationMonth[[params$lang]]`
+:::
+```{r plot-average-duration-month}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AverageDurationMonth
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AverageDurationMonth[[params$lang]]`
+:::
+```{r plot-average-duration-month-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AverageDurationMonth
+```
+:::
+:::
+
+Der Einfluss der längeren Laufzeiten auf die Nachfrage wird deutlich, wenn bei der Höhe der nachgefragten Mittel pro Gesuch auch die Projektlaufzeit explizit mitberücksichtigt wird. So zeigt die folgende Grafik die Entwicklung der nachgefragten Mittel pro Gesuch-Jahr.
+
+<!-- plot for average amount requested for project-year -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerYear[[params$lang]]`
+:::
+```{r plot-amount-per-year}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AmountPerYear
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerYear[[params$lang]]`
+:::
+```{r plot-amount-per-year-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AmountPerYear
+```
+:::
+:::
+
+Der Anstieg der Nachfrage nach Mitteln in der Projektförderung flacht ab (orange Linie): von durchschnittlich 141 000 Franken pro Gesuch und Jahr auf 191 000 Franken. Kontrolliert man für die angefragte Laufzeit pro Gesuch, fällt auch bei den Karriereinstrumenten der Anstieg der Höhe der nachgefragten Mittel geringer aus (violette Linie). Dennoch ist der verbleibende Anstieg nicht unbedeutend und wird im Weiteren näher untersucht.
+
+### Mehr Projektpartner:innen
+
+Durch die Reform der Projektförderung wurden Anpassungen an den Regelungen zu Projektpartner:innen und (Co-)Gesuchstellenden gemacht. Seither nutzen Gesuchstellende die Möglichkeit, sich in Teams mit mehreren Projektpartner:innen für die Projektförderung zu bewerben: Bis 2016 haben sich Teams mit durchschnittlich zwei Personen beworben, ab 2017 sind es drei oder mehr, wie die orange Linie in der Grafik unten zeigt. Dies dürfte, neben anderen Faktoren, den verbleibenden Anstieg in den nachgefragten Mitteln pro Gesuch und Jahr erklären. Für weitere Analysen zu Projektpartner:innen siehe: [Besser vernetzt dank Projektpartnerschaften: Blick zurück auf die ersten Jahre](https://data.snf.ch/stories/projektpartnerschaften-und-vernetzte-forschung-de.html).
+
+<!-- plot for average team size in a project -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AverageTeamSize[[params$lang]]`
+:::
+```{r plot-average-team-size}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AverageTeamSize
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AverageTeamSize[[params$lang]]`
+:::
+```{r plot-average-team-size-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AverageTeamSize
+```
+:::
+:::
+
+### Konsequenzen der steigenden Nachfrage 
+
+Bei steigender Nachfrage und nicht ausreichend verfügbaren Mitteln kann der SNF entweder weniger Gesuche fördern oder er muss die Zusprachen pro Gesuch kürzen. Nach kritischer Prüfung der angefragten Mittel kann es teilweise zu Kürzungen pro Gesuch kommen. Der SNF strebt grundsätzlich aber an, den genehmigten Gesuchen die Mittel in angefragter Höhe zur Verfügung zu stellen. 
+
+Dies spiegelt sich entsprechend in den Erfolgsquoten wider. Die sinkenden Erfolgsquoten für die Projekt- und Karriereförderung zeigen, dass der Anteil bewilligter Gesuche an allen eingereichten Gesuchen abnimmt: von über 50\% auf knapp über 30\% für die Projekt- und Karriereförderung. Dabei gibt es insbesondere in der Karriereförderung grosse Unterschiede zwischen den jeweiligen Förderinstrumenten. Der SNF spielt in der Karriereförderung eine subsidiäre Rolle und richtet seine Förderung stärker an der Anzahl genehmigter Gesuche als an einer konstanten Förderrate aus. Niedrigere Erfolgsquoten bedeuten einerseits erhöhter Wettbewerb. Andererseits können sie auch bedeuten, dass qualitativ hochwertige Gesuche keine Förderung erhalten.
+
+<!-- plot for success rates -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$SuccessRate[[params$lang]]`
+:::
+```{r plot-success-rate}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$SuccessRate
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$SuccessRate[[params$lang]]`
+:::
+```{r plot-success-rate-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$SuccessRate
+```
+:::
+:::
+
+Auch bei den Förderraten, welche den Anteil der zugesprochenen Mittel an allen insgesamt angefragten Mitteln darstellen, ist ein rückläufiger Trend ersichtlich. Dieser Rückgang ist jedoch nicht so ausgeprägt wie bei den Erfolgsquoten.
+
+<!-- plot for funding rates -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$FundingRate[[params$lang]]`
+:::
+```{r plot-funding-rate}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$FundingRate
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$FundingRate[[params$lang]]`
+:::
+```{r plot-funding-rate-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$FundingRate
+```
+:::
+:::
+
+### Fazit der deskriptiven Analyse
+
+-	Die steigende Nachfrage ist in erster Linie auf höher werdende angefragte Budgets pro Gesuch in der Projekt- und Karriereförderung zurückzuführen. 
+-	Die höheren Budgets sind unter anderem durch länger werdende Laufzeiten pro Gesuch und in der Projektförderung auch durch grösser werdende Teams bedingt. Bei nicht ausreichend verfügbaren Mitteln bedeutet dies, dass der SNF weniger Gesuche fördern kann, was zu erhöhtem Wettbewerb führt.
+
+<!-- define info box for data sources -->
+::: info-box
+### Datengrundlage
+
+Als Datengrundlage der vorliegenden Analyse gelten die gesamten Gesuchseingänge für alle Förderinstrumente des SNF zwischen `r starting_year` und `r reporting_year`. Dabei bezieht sich das Jahr auf das Entscheidungsjahr einer Ausschreibung. Die Daten zu den jeweiligen Instrumenten entsprechen der Datengrundlage der [offiziellen Kennzahlen im SNF-Datenportal](https://data.snf.ch/key-figures). Somit sind die Nationalen Forschungsschwerpunkte (NFS) von der Analyse ausgeschlossen. Des Weiteren sind aufgrund ausserordentlicher Budgetierung zusätzlich folgende Instrumente nicht in der Analyse inbegriffen: Horizon-Europe-Übergangsmassnahmen, Open-Access-Förderung, Energieforschung (Ambizione und Assistant Professor), Erweiterungsbeiträge, die Schweizer Roadmap für Forschungsinfrastrukturen sowie die Instrumente r4d, SOR4D, SCOPES und MARVIS. Ebenfalls nicht enthalten sind die Overhead-Beiträge (Beiträge des SNF an die Hochschulen zur Deckung eines Teils der indirekten Forschungskosten). Aufgrund der Integration des Instruments Eccellenza in die hier nicht berücksichtigten Horizon-Europe-Übergangsmassnahmen im Jahr 2022, sowie des Instruments PRIMA im Jahr 2023 (für mehr Informationen zu den Übergangsmassnahmen siehe:  [2022: 173 Millionen Franken für die Übergangsmassnahmen](https://data.snf.ch/stories/vorlaeufige-zahlen-2022-de.html)), wurden der Vollständigkeit halber die Daten für Eccellenza im Jahr 2022 und 2023 und für PRIMA im Jahr 2023 anhand von Durchschnittswerten aus den Vorjahren einberechnet. Schliesslich wurden Internationale Kurzsaufenthalte aufgrund ihres kurzen Formats und der Förderung des wissenschaftlichen Austauschs von der Karriereförderung der Wissenschaftskommunikation zugeordnet.
+
+Die Bundesbeiträge in der ersten Grafik setzen sich zusammen aus dem Grundbeitrag sowie Zusatzbeiträgen aus den Mandaten und Zusatzaufgaben für die Nationalen Forschungsprogramme (NFP), FLARE und den bilateralen Programmen. Die Mittel für Übergangsmassnahmen des SNF aufgrund der Nicht-Assoziierung der Schweiz an Horizon Europe sowie die Mittel für Nationale Forschungsschwerpunkte (NFS) und für die Overhead-Beiträge sind analog zu den Nachfragedaten aus der Analyse ausgenommen.
+:::
+
+Daten, Text und Code dieser Datengeschichte sind [auf Github verfügbar](`r params$github_url`) und [auf Zenodo archiviert](`r params$doi`). <br>DOI: `r str_remove(params$doi, "https://doi.org/")`
+
+```{r prevent-internal-snsf-packages, include=FALSE}
+#| include: false
+
+# Internal SNSF packages must not be used in data stories, as their
+# pre-processing functions are internal and the corporate design differs from
+# the data portal.
+if (any(c("snfverse", "snf.preprocessing", "snf.plot") %in% 
+        loadedNamespaces())) {
+  stop(glue(
+    "You must not use internal SNSF packages in data stories.",
+    " Please resort to snf.datastory."
+  ))
+}
+```

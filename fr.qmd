@@ -1,0 +1,723 @@
+---
+title: "`r params$title`"
+format:
+  html:
+    # To use instead of self-contained that has been deprecated
+    # Using custom page layout (via 'style.css')
+    # Open link in a new window by default
+    # Display footnotes in pop-up window when hovering on it
+    toc: false
+    css: ["style.css"]
+    mainfont: Theinhardt
+    fontsize: "16px"
+    embed-resources: true
+    page-layout: custom
+    link-external-newwindow: true
+    footnotes-hover: true
+params:
+  title: ""
+  publication_date: ""
+  lang: "fr"
+  doi: ""
+  github_url: ""
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r general-setup, include=FALSE}
+## This file contains the ENGLISH version of the data story
+
+# Set general chunk options
+knitr::opts_chunk$set(
+  echo = FALSE,
+  fig.showtext = TRUE,
+  fig.retina = 3,
+  fig.align = "center",
+  warning = FALSE,
+  message = FALSE
+)
+
+# Install snf.datastory package if not available, otherwise load it
+if (!require("snf.datastory")) {
+  if (!require("devtools")) {
+    install.packages("devtools")
+    library(devtools)
+  }
+  install_github("snsf-data/snf.datastory")
+  library(snf.datastory)
+}
+
+# Load packages
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(conflicted)
+library(jsonlite)
+library(here)
+library(glue)
+library(ggiraph)
+library(showtext)
+library(systemfonts)
+
+# Conflict preferences
+conflict_prefer("filter", "dplyr")
+conflict_prefer("get_datastory_theme", "snf.datastory")
+conflict_prefer("get_datastory_scheme", "snf.datastory")
+
+is_theinhardt_available <- file.exists(here("fonts", "TheinhardtReg.otf"))
+
+if (is_theinhardt_available) {
+  
+  sysfonts::font_add(
+    family = "Theinhardt",
+    regular = here("fonts", "TheinhardtReg.otf"),
+    bold = here("fonts", "TheinhardtBold.otf"),
+    bolditalic = here("fonts", "TheinhardtBoldIt.otf"),
+    italic = here("fonts", "TheinhardtRegIt.otf"),
+  )
+  
+  # Need to register the font to allow its use by ggiraph when creating SVG
+  # files.
+  if (!font_family_exists("Theinhardt")) {
+    
+    # Register existing/downloaded fonts
+    register_font(
+      name = "Theinhardt",
+      plain = list("fonts/TheinhardtReg.otf", 0),
+      bold = list("fonts/TheinhardtBold.otf", 0),
+      italic = list("fonts/TheinhardtRegIt.otf", 0),
+      bolditalic = list("fonts/TheinhardtBoldIt.otf", 0)
+    )
+  }
+  
+  font <- "Theinhardt"
+  
+} else {
+  
+  font <- "Arial"
+  
+}
+
+# Need if we want to use the registered font in ggiraph plots
+showtext_auto()
+
+# Increase showtext package font resolution
+showtext_opts(dpi = 320)
+
+# Set the locale for date formatting (Windows)
+Sys.setlocale(
+  "LC_TIME",
+  switch(
+    params$lang,
+    en = "English",
+    de = "German",
+    fr = "French"
+  )
+)
+
+# Create function to print number with local language-specific format
+print_num <- function(x) snf.datastory::print_num(x, lang = params$lang)
+
+# Knitr hook for local formatting of printed numbers
+knitr::knit_hooks$set(
+  inline <- function(x) {
+    if (!is.numeric(x)) {
+      x
+    } else {
+      print_num(x)
+    }
+  }
+)
+
+# Function that returns the desired language version of a string, given three
+# language strings are provided to the function.
+translate <- function(en_string = "NOT TRANSLATED",
+                      de_string = "NOT TRANSLATED",
+                      fr_string = "NOT TRANSLATED",
+                      lang = "en") {
+  
+  string <-
+    case_when(
+      lang == "en" ~ en_string, 
+      lang == "de" ~ de_string, 
+      lang == "fr" ~ fr_string, 
+      TRUE ~ "NO VALID LANGUAGE SPECIFIED"
+    )
+  
+  return(string)
+  
+}
+
+```
+
+```{r print-header-infos}
+#| results: asis
+
+# Add publication date to header
+cat(format(as_datetime(params$publication_date), "%d.%m.%Y"))
+```
+
+```{r story-specific-setup}
+#| include: false
+
+# Set story-specific variables
+starting_year <- 2011
+reporting_year <- 2023
+
+# load utility functions
+source(here("utils", "util_funs.R"))
+# load and preprocess the raw data
+source(here("utils", "preprocess_data.R"))
+# load plot descriptions
+source(here("utils", "define_plot_descriptions.R"))
+```
+
+<!-- Short lead (2-3 sentences) in bold -->
+
+**Depuis plusieurs années, les demandes de fonds auprès du FNS augmentent continuellement. Pourquoi cette évolution ? Les chercheuses et chercheurs sont-ils plus nombreux à solliciter un financement, ou les budgets soumis sont-ils plus élevés ? Et quelles sont les conséquences de cette dynamique ? Pour répondre à ces questions, nous avons procédé à une analyse de données internes.**
+
+<!-- prepare data for demand totals to the SNSF vs. Federal Contributions -->
+
+```{r data-demand-total}
+# ---------------------------------------------------------------------------- #
+# prepare summary data for total budget requested vs. federal contributions
+demand_total <- data %>%
+  # add imputed values for eccelenza for year 2022
+  add_row(FundingInstrumentGaReporting = "Eccellenza",
+          CallDecisionYearReporting = 2022,
+          AmountRequested = data_eccelenza_imputed$TotalAmountRequested) %>%
+  # add imputed values for eccelenza for year 2023
+  add_row(FundingInstrumentGaReporting = "Eccellenza",
+          CallDecisionYearReporting = 2023,
+          AmountRequested = data_eccelenza_imputed$TotalAmountRequested) %>%
+  # add imputed values for PRIMA for year 2023
+  add_row(FundingInstrumentGaReporting = "PRIMA",
+          CallDecisionYearReporting = 2023,
+          AmountRequested = data_prima_imputed$TotalAmountRequested) %>%
+  # group by call decision year
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the total amount requested
+  summarise(
+    # sum of all amounts requested across all grants in a given year
+    `Funding requests to the SNSF` = sum(AmountRequested, na.rm = TRUE)) %>%
+  # ungroup 
+  ungroup() %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # add data regarding amount received from the federal contributions
+  add_column(
+    # add federal contributions in MCHF
+    `Federal contributions` = data_federal$FederalContribution * 1000) %>%
+  # display amount requested in MCHF
+  mutate(`Funding requests to the SNSF` =
+           `Funding requests to the SNSF` / 1000000) %>%
+  # reshape format to long
+  pivot_longer(-CallDecisionYearReporting,
+               names_to = "FundingSource",
+               values_to = "TotalAmount") %>%
+  # rename FundingSource depending on language
+  mutate(FundingSource = case_when(
+    # federal contributions
+    FundingSource == "Federal contributions" ~ federal_contrib_legend,
+    # demand to SNSF
+    FundingSource == "Funding requests to the SNSF" ~ demand_snsf_legend,
+    # fallback as NA
+    TRUE ~ NA
+  )) %>%
+  # set factor order of the funding instruments
+  mutate(FundingSource = fct_relevel(FundingSource,
+                                     federal_contrib_legend,
+                                     demand_snsf_legend))
+# ---------------------------------------------------------------------------- #
+```
+
+### Principales conclusions
+
+Une analyse descriptive du nombre de requêtes déposées entre `r starting_year` et `r reporting_year` montre que :
+
+- l’augmentation des demandes de fonds auprès du FNS s’explique en premier lieu par des budgets par requête plus élevés dans l’encouragement de projets et de carrières ;
+- la hausse des budgets résulte d’une augmentation de la durée sollicitée par requête et, s’agissant de l’encouragement de projets, par des équipes de plus en plus grandes ;
+- la proportion de requêtes approuvées par rapport au nombre de requêtes déposées est en baisse : de plus de 50 \% à guère plus de 30 \% dans l’encouragement de projets et de carrières.
+
+Les demandes de fonds auprès du FNS ne cessent d’augmenter depuis plusieurs années ; elles ont notamment enregistré un bond spectaculaire en 2016, comme le montre la courbe jaune du premier graphique. Dans le même temps, les subventions fédérales allouées au FNS (courbe bleue) n’ont pas progressé au même rythme. L’écart entre le financement sollicité et les ressources à disposition se creuse continuellement. Autrement dit : il n’est plus possible de donner suite, dans la mesure souhaitée, à un nombre croissant de requêtes.
+
+<!-- and plot the interactive figure -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmount[[params$lang]]`
+:::
+```{r plot-demand-total}
+#| out-width: "100%"
+#| fig-height: 4
+
+# ---------------------------------------------------------------------------- #
+# Create ggplot timeseries plot
+demand_total_plot <- get_ggplot_main(demand_total)
+
+# ---------------------------------------------------------------------------- #
+# Create ggiraph interactive plot
+get_ggirafe(demand_total_plot)
+# ---------------------------------------------------------------------------- #
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmount[[params$lang]]`
+:::
+```{r plot-demand-total-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+# ---------------------------------------------------------------------------- #
+# Create ggplot timeseries plot
+demand_total_plot <- get_ggplot_main(demand_total, mobile = TRUE)
+
+# ---------------------------------------------------------------------------- #
+# Create ggiraph interactive plot
+get_ggirafe(demand_total_plot)
+# ---------------------------------------------------------------------------- #
+```
+:::
+:::
+
+Afin d’identifier les facteurs susceptibles d’influencer cette évolution, nous avons procédé à une analyse descriptive de la demande de soutien. Nous avons analysé tous les instruments d’encouragement du FNS pour la période `r starting_year` – `r reporting_year`, en mettant l’accent sur les deux plus grandes catégories : [l’encouragement de projets](https://www.snf.ch/fr/WAvYcY7awAUGolST/encouragement/projets/projets-toutes-les-disciplines) et [l’encouragement de carrières](https://www.snf.ch/fr/48YVbNHGCW52J2TW/page/encouragement/carrieres).
+
+<!-- define info box for project and career funding -->
+::: info-box
+### Encouragement de projets et de carrières
+
+Grâce à l’encouragement de projets, le FNS finance, sans thème imposé ni restriction de discipline scientifique, les projets de recherche de chercheuses et chercheurs individuels ou de petits groupes de recherche. En 2016, le FNS a réformé l’instrument d’encouragement de projets, notamment pour mieux adapter son offre aux besoins des chercheuses et chercheurs en matière de durée des projets et de taille des équipes. S’agissant de l’encouragement de carrières, il soutient en premier lieu les chercheuses et les chercheurs à titre personnel. Par le biais de programmes conçus spécifiquement pour les différents échelons de carrière, en particulier les personnes en début ou milieu de carrière, le FNS soutient l’expérience scientifique et l’indépendance des bénéficiaires. Les [Pôles de recherche nationaux](https://www.snf.ch/fr/FJBJ8XGQ1tjG8J8w/encouragement/programmes/poles-de-recherche-nationaux) (PRN) et les mesures transitoires Horizon Europe sont exclus en raison de leur orientation particulière. L’encadré à la suite du présent article précise les données qui sous-tendent notre analyse.
+:::
+
+Par souci d’exhaustivité, nous présentons ci-après les instruments d’encouragement dans leur ensemble (courbe grise « Tous les instruments »), en plus de l’encouragement de projets (sans les appels à projets spéciaux tels que [Spark](https://www.snf.ch/fr/8EWqXT6CZ7wuAJUq/encouragement/programmes/spark)) et de l’encouragement de carrières.
+
+### Perspective globale
+
+Selon nos analyses, les demandes de fonds sont en hausse pour presque tous les instruments du FNS, la demande globale étant stimulée en particulier par les instruments d’encouragement de projets et de carrières.
+
+- En ce qui concerne les projets, la demande est passée de 840 millions à 1500 millions de francs au cours des dix dernières années (courbe orange dans le graphique suivant).
+- Pour ce qui est des carrières, elle est passée de 490 millions à 1100 millions de francs sur la même période (courbe violette). Le bond à près de 1500 millions en 2018 présente un caractère exceptionnel : il correspond à un chevauchement de deux mises au concours.
+
+Avec jusqu’à 3000 requêtes par an, ces deux types d’encouragement sont les plus prisés des chercheuses et des chercheurs ainsi que des groupes de recherche. La forte augmentation de la demande entre 2015 et 2016, qui ressort du premier graphique, est, en sus, à mettre sur le compte des [Programmes nationaux de recherche](https://www.snf.ch/fr/ELxP53n5RBBa08a2/encouragement/programmes/programmes-nationaux-de-recherche) (PNR).
+
+<!-- prepare data for all instruments together -->
+
+```{r data-demand-all-instruments}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for all instruments
+demand_all_instruments <- data %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # impute eccelenza data for the year 2022
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2022) %>%
+  # and year 2023 as well
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2023) %>%
+  # and year 2023 for PRIMA
+  impute_data(data_imputed = data_prima_imputed, year = 2023) %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- prepare data for careers -->
+
+```{r data-demand-careers}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for careers
+demand_careers <- data %>%
+  # filter out only careers instruments
+  filter(FundingInstrumentGaLevel1 == "Careers") %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # impute eccelenza data for the year 2022
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2022) %>%
+  # and year 2023 as well
+  impute_data(data_imputed = data_eccelenza_imputed, year = 2023) %>%
+  # and year PRIMA for year 2023 as well
+  impute_data(data_imputed = data_prima_imputed, year = 2023) %>%
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- prepare data for projects -->
+
+```{r data-demand-projects}
+# ---------------------------------------------------------------------------- #
+# prepare data for plots for all quantities of interest for projects
+demand_projects <- data %>%
+  # filter out only project funding (as defined in the Dataportal's grant search
+  # i.e. Projects -> Project funding (no special calls, no Spark calls, etc.)
+  filter(FundingInstrumentGaReporting == "Project funding") %>%
+  # group data on yearly level
+  group_by(CallDecisionYearReporting) %>%
+  # summarize the quantities of interest needed for the descriptive analyses
+  get_descriptive_stats() %>%
+  # ungroup 
+  ungroup() %>%
+  # no imputation of Eccelenza as it belongs to Careers and not Projects
+  # arrange by year
+  arrange(CallDecisionYearReporting) %>%
+  # display quantities of interest in appropriate scales
+  scale_output_stats()
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- combine the data sources -->
+
+```{r data-demand-combined}
+# ---------------------------------------------------------------------------- #
+# combine summary data of all instruments, careers and projects together
+demand_combined <- demand_all_instruments %>%
+  # add respective funding isntrument name for all instruments in total
+  mutate(FundingInstrument = all_instruments) %>%
+  # and rbind the data from projects from previous dataset
+  bind_rows(demand_projects %>%
+              # add respective funding instrument name for projects
+              mutate(FundingInstrument = projects)) %>%
+  # and rbind the data from careers from previous dataset
+  bind_rows(demand_careers %>%
+              # add respective funding instrument name for projects
+              mutate(FundingInstrument = careers)) %>%
+  # set factor order of the funding instruments
+  mutate(FundingInstrument = fct_relevel(FundingInstrument,
+                                         careers, projects, all_instruments))
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- generate all the plots needed and save them into a named list -->
+
+```{r generate-plots}
+# ---------------------------------------------------------------------------- #
+# generate plots for all quantities of interest
+plot_list <- get_plots(plot_data = demand_combined,
+                       plot_types = plot_types[-1],
+                       lang = params$lang,
+                       mobile = FALSE)
+# ---------------------------------------------------------------------------- #
+```
+
+```{r generate-plots-mobile}
+# ---------------------------------------------------------------------------- #
+# generate plots for all quantities of interest for mobile version
+plot_list_mobile <- get_plots(plot_data = demand_combined,
+                              plot_types = plot_types[-1],
+                              lang = params$lang,
+                              mobile = TRUE)
+# ---------------------------------------------------------------------------- #
+```
+
+<!-- plot for total amount requested -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmountRequested[[params$lang]]`
+:::
+```{r plot-total-amount-requested}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$TotalAmountRequested
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalAmountRequested[[params$lang]]`
+:::
+```{r plot-total-amount-requested-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$TotalAmountRequested
+```
+:::
+:::
+
+### La demande n’est pas dopée par le nombre de requêtes
+
+Nos analysent révèlent que les demandes croissantes de fonds ne découlent pas d’une augmentation du nombre de requêtes. Le nombre de requêtes déposées dans l’encouragement de projets se maintient, à quelques exceptions près, entre 2000 et 2500 par an, comme l’illustre la courbe orange dans le graphique ci-dessous. Pour l’encouragement de carrières également aucune tendance à la hausse ou à la baisse claire ne se dégage.
+
+<!-- plot for total number submitted -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$TotalNumberSubmitted[[params$lang]]`
+:::
+```{r plot-total-number-submitted}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$TotalNumberSubmitted
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$TotalNumberSubmitted[[params$lang]]`
+:::
+```{r plot-total-number-submitted-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$TotalNumberSubmitted
+```
+:::
+:::
+
+Qu’est-ce qui – hormis le nombre de requêtes – pourrait faire grimper les demandes de fonds ?
+
+### Le subside sollicité par requête est en hausse
+
+Notre analyse est sans équivoque : le subside sollicité par requête augmente sensiblement comme le montre la figure suivante, et ce aussi bien pour l’encouragement de projets (courbe orange) que pour l’encouragement de carrières (courbe violette).
+
+<!-- plot for average amount per submission -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerSubmission[[params$lang]]`
+:::
+```{r plot-amount-per-submission}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AmountPerSubmission
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerSubmission[[params$lang]]`
+:::
+```{r plot-amount-per-submission-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AmountPerSubmission
+```
+:::
+:::
+
+L’encouragement de projets a connu une augmentation importante des subsides sollicités entre 2016 et 2017 : le montant moyen par requête est passé de 400 000 francs à près de 600 000 francs. La réforme, entrée en vigueur en 2016, a joué un rôle dans cette évolution. À l’époque, le FNS avait allongé la durée maximale des projets de 3 à 4 ans et permis l’ajout de partenaires de projet. Par ces mesures, le FNS a tenu compte de l’importance croissante de la recherche collaborative et répondu aux besoins des chercheuses et des chercheurs.
+
+Dans l’encouragement de carrières, le subside sollicité moyen par requête a augmenté de manière importante de 2017 à 2018, passant de 300 000 francs à près du double. Cette évolution peut notamment être attribuée à l’introduction d’[Eccellenza](https://www.snf.ch/fr/DGCP4SuM4eU2O1bz/encouragement/carrieres/eccellenza) et de [PRIMA](https://www.snf.ch/fr/soMWfibVDpNMVR36/encouragement/carrieres/prima) : en proposant des financements sur une durée allant jusqu’à 5 ans, ces offres d’encouragement permettent aux requérant·es de solliciter des fonds plus conséquents que pour les autres instruments de carrières. Notons également que la période en question coïncide avec la dernière mise au concours des Professeurs boursiers, un instrument dont Eccellenza a justement pris la relève.
+
+### Chercheurs et chercheuses soumettent des projets de plus longues durées
+
+Conformément aux prévisions, le relèvement des durées maximales de financement mis en place dans le cadre de la réforme de l’instrument d’encouragement de projets a résulté en une hausse des durées effectives sollicitées. L’évolution correspondante est représentée par la courbe orange ci-dessous. Jusqu’en 2016, la durée moyenne demandée par requête d’encouragement de projets se situait légèrement au-dessus de 30 mois. Depuis de 2017, les requérant·es exploitent les nouvelles possibilités offertes par la réforme. La durée moyenne demandée approche désormais 44 mois.
+
+Pour les instruments de carrières également, la durée sollicitée exerce une forte influence sur la demande de fonds. En analysant l’évolution des durées moyennes demandées par requête d’encouragement de carrières (courbe violette), on distingue un net accroissement à partir de 2018. Alors que cette durée se situait de manière constante aux alentours de 24 mois avant 2018, elle s’est accrue à environ 38 mois avec l’introduction d’Eccellenza et de PRIMA, des instruments offrant tous deux un financement pouvant s’étendre sur une période de 60 mois.
+
+<!-- plot for average duration in months -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AverageDurationMonth[[params$lang]]`
+:::
+```{r plot-average-duration-month}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AverageDurationMonth
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AverageDurationMonth[[params$lang]]`
+:::
+```{r plot-average-duration-month-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AverageDurationMonth
+```
+:::
+:::
+
+L’influence de l’allongement des durées de financement sur les demandes de fonds est manifeste lorsque l’on tient compte explicitement de la durée du projet en plus du subside sollicité. Le graphique ci-après présente l’évolution des demandes de fonds par requête et par année de financement.
+
+<!-- plot for average amount requested for project-year -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerYear[[params$lang]]`
+:::
+```{r plot-amount-per-year}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AmountPerYear
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AmountPerYear[[params$lang]]`
+:::
+```{r plot-amount-per-year-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AmountPerYear
+```
+:::
+:::
+
+On observe un aplatissement de la progression des demandes de fonds dans l’encouragement de projets (courbe orange), de 141 000 francs en moyenne par requête et par année de financement à 191 000 francs. En corrigeant également pour la durée du subside, le constat est similaire pour les instruments de carrières : l’augmentation du subside sollicité s’avère moindre (courbe violette). Néanmoins, la hausse résiduelle n’est pas négligeable et sera examinée de manière plus approfondie ci-après.
+
+### Progression du nombre de partenaires de projet
+
+La réforme de 2016 de l’encouragement de projets a permis d'inclure dans les requêtes, en plus de (co-)requérant·es, des partenaires de projet. Depuis, les requérant·es postulent également en groupe, associés à plusieurs partenaires de projet. Si, jusqu’en 2016, les équipes de recherche soumettant leur projet comptaient en moyenne deux membres, ce chiffre est passé à trois ou plus à partir de 2017 (courbe orange dans le graphique ci-dessous). Ce facteur devrait, entre autres, expliquer la hausse résiduelle de la demande de fonds par requête et par an. Pour consulter l’analyse consacrée spécifiquement aux partenaires de projet, suivez ce lien : [Recherche en réseau renforcée grâce aux partenaires de projet : un premier bilan](https://data.snf.ch/stories/partenaires-de-projet-et-recherche-en-reseau-fr.html).
+
+<!-- plot for average team size in a project -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$AverageTeamSize[[params$lang]]`
+:::
+```{r plot-average-team-size}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$AverageTeamSize
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$AverageTeamSize[[params$lang]]`
+:::
+```{r plot-average-team-size-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$AverageTeamSize
+```
+:::
+:::
+
+### Conséquences de l’augmentation de la demande
+
+Si la demande augmente et que, simultanément, les ressources disponibles sont insuffisantes, le FNS devra faire un choix : approuver moins de requêtes ou réduire le subside octroyé par requête. Après un examen critique des demandes de fonds, des réductions du subside octroyé par requête peuvent éventuellement être décidées. Toutefois, le FNS s’efforce, en toute circonstance, de financer les requêtes approuvées à hauteur des fonds demandés.
+
+Les taux de réussite s’en trouvent logiquement affectés. Le fléchissement des taux de réussite dans l’encouragement de projets et de carrières l’atteste : la proportion de requêtes approuvées par rapport au nombre de requêtes déposées est en baisse dans ces catégories – de 50 \% à guère plus de 30 \%. Les écarts entre les différents instruments disponibles sont, à cet égard, particulièrement marqués dans l’encouragement de carrières. Le FNS joue un rôle subsidiaire dans l’encouragement de carrières ; son encouragement est davantage axé sur le nombre de requêtes approuvées que sur un taux d’encouragement constant. Si de faibles taux de réussite sont synonymes de concurrence accrue, ils peuvent également signifier que des requêtes de grande qualité ont été rejetées.
+
+<!-- plot for success rates -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$SuccessRate[[params$lang]]`
+:::
+```{r plot-success-rate}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$SuccessRate
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$SuccessRate[[params$lang]]`
+:::
+```{r plot-success-rate-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$SuccessRate
+```
+:::
+:::
+
+Le taux d’encouragement, c'est-à-dire la proportion des fonds alloués dans le total des demandes de fonds, affiche lui aussi une tendance à la baisse. Ce recul est somme toute moins prononcé que pour les taux de réussite.
+
+<!-- plot for funding rates -->
+::: {.hide-mobile .hide-tablet}
+::: plot-box
+::: plot-title
+`r plot_titles$FundingRate[[params$lang]]`
+:::
+```{r plot-funding-rate}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list$FundingRate
+```
+:::
+:::
+
+::: hide-desktop
+::: plot-box
+::: plot-title
+`r plot_titles$FundingRate[[params$lang]]`
+:::
+```{r plot-funding-rate-mobile}
+#| out-width: "100%"
+#| fig-height: 4
+
+plot_list_mobile$FundingRate
+```
+:::
+:::
+
+### Conclusion de l’analyse descriptive
+
+- L’augmentation de la demande s’explique en premier lieu par une hausse du subside sollicité par requête dans l’encouragement de projets et de carrières.
+- Les budgets plus élevés résultent d’une augmentation de la durée sollicitée par requête et, s’agissant de l’encouragement de projets, par des équipes de plus en plus grandes. Si les ressources disponibles sont insuffisantes, le nombre de subsides que le FNS pourra octroyer sera moindre, d’où une concurrence accrue.
+
+<!-- define info box for data sources -->
+::: info-box
+###	Données
+
+Les données qui sous-tendent la présente analyse se composent de la totalité des requêtes déposées pour tous les instruments d’encouragement durant la période `r starting_year` - `r reporting_year`. À cet égard, le moment où sont prises les décisions d’encouragement est déterminant pour définir l’affectation des requêtes à une année statistique. Les données relatives aux différents instruments, utilisées dans le cadre de cette analyse, sont issues des [chiffres clés du Fonds national suisse](https://data.snf.ch/key-figures). Par conséquent, les Pôles de recherche nationaux (PRN) et les mesures transitoires Horizon Europe sont exclus de l’analyse. En outre, les instruments suivants, qui font l’objet d’une budgétisation extraordinaire, ne sont pas inclus dans l’analyse : mesures transitoires Horizon Europe, encouragement du libre accès, recherche énergétique (Ambizione et Assistant Professor), contributions à l’élargissement la feuille de route suisse pour les infrastructures de recherche, ainsi que les instruments r4d, SOR4D, SCOPES et MARVIS. Les subsides overhead (contributions du FNS aux hautes écoles pour couvrir une partie des coûts indirects de la recherche) ne sont pas non plus inclus.  Les instruments Eccellenza et PRIMA ont été intégrés, respectivement en 2022 et 2023, dans les mesures transitoires Horizon Europe. Pour cette raison, les données de 2022-2023 d'Eccellenza, et 2023 pour PRIMA, ont été calculées sur la base des valeurs moyennes des années précédentes, puis incluses dans l’analyse par souci d’exhaustivité. (Pour plus d’informations sur les mesures transitoires, voir : [2022 : 173 millions de francs pour les projets liés aux mesures transitoires](https://data.snf.ch/stories/encouragement-2022-donnees-preliminaires-fr.html).). Finalement, l’instrument soutenant les brefs séjours internationaux, normalement catégorisé comme instrument de carrière, a été réattribué aux instruments soutenant la communication scientifique en raison du caractère court du subside et de sa nature à soutenir les échanges scientifiques.
+
+Les subventions fédérales présentées dans le premier graphique comprennent la contribution de base, de même que les contributions supplémentaires issues des mandats et tâches supplémentaires pour les Programmes nationaux de recherche (PNR), le programme FLARE et les programmes bilatéraux. Ne sont pas incluses dans cette analyse les données relatives aux subventions allouées au FNS au titre de mesures transitoires en raison de la non-association de la Suisse au programme Horizon Europe, ainsi que les ressources allouées aux Pôles de recherche nationaux (PRN) et les subsides overhead. Ces données ont également été exclues de l’analyse des demandes de fonds.
+:::
+
+Les données, le texte et le code de ce récit de données sont [disponibles sur Github](`r params$github_url`) et [archivés sur Zenodo](`r params$doi`). <br>DOI: `r str_remove(params$doi, "https://doi.org/")`
+
+```{r prevent-internal-snsf-packages, include=FALSE}
+#| include: false
+
+# Internal SNSF packages must not be used in data stories, as their
+# pre-processing functions are internal and the corporate design differs from
+# the data portal.
+if (any(c("snfverse", "snf.preprocessing", "snf.plot") %in% 
+        loadedNamespaces())) {
+  stop(glue(
+    "You must not use internal SNSF packages in data stories.",
+    " Please resort to snf.datastory."
+  ))
+}
+```
